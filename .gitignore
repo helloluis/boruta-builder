@@ -1,0 +1,12 @@
+# Data files
+boruta-features-202*.csv
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Output files
+feature_config.json

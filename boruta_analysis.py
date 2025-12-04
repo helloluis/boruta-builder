@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import shap
 from boruta import BorutaPy
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
@@ -56,19 +57,37 @@ def run_boruta_analysis(
     if target_column not in df.columns:
         raise ValueError(f"Target column '{target_column}' not found in CSV. Available columns: {list(df.columns)}")
 
-    # Separate features and target
-    feature_columns = [col for col in df.columns if col != target_column]
-    X = df[feature_columns].values
+    # Separate features and target (only numeric columns)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    feature_columns = [col for col in numeric_cols if col != target_column]
+
+    # Warn about excluded non-numeric columns
+    excluded_cols = [col for col in df.columns if col not in numeric_cols and col != target_column]
+    if excluded_cols:
+        print(f"Note: Excluding non-numeric columns: {excluded_cols}")
+
     y = df[target_column].values
 
-    # Handle missing values
+    # Drop rows with missing target values first
+    if pd.isna(y).any():
+        missing_count = pd.isna(y).sum()
+        print(f"Warning: Dropping {missing_count} rows with missing target values.")
+        mask = ~pd.isna(y)
+        df = df[mask]
+        y = y[mask]
+
+    # Drop columns that are entirely NaN
+    all_nan_cols = [col for col in feature_columns if df[col].isna().all()]
+    if all_nan_cols:
+        print(f"Warning: Dropping columns with all NaN values: {all_nan_cols}")
+        feature_columns = [col for col in feature_columns if col not in all_nan_cols]
+
+    # Now get features and handle missing values
+    X = df[feature_columns].values
     if np.isnan(X).any():
         print("Warning: Found NaN values in features. Filling with column means.")
         df_features = df[feature_columns].fillna(df[feature_columns].mean())
         X = df_features.values
-
-    if pd.isna(y).any():
-        raise ValueError("Target column contains missing values. Please clean your data.")
 
     print(f"\nRunning Boruta analysis...")
     print(f"  Task type: {task_type}")
@@ -116,21 +135,95 @@ def run_boruta_analysis(
         else:
             rejected_features.append(col)
 
-    # Enabled features = confirmed + tentative
-    enabled_features = confirmed_features + tentative_features
-
     print(f"\nResults:")
     print(f"  Confirmed features: {len(confirmed_features)}")
     print(f"  Tentative features: {len(tentative_features)}")
     print(f"  Rejected features: {len(rejected_features)}")
+
+    # Calculate SHAP importance scores for confirmed features
+    feature_importance = {}
+    if confirmed_features or tentative_features:
+        print(f"\nCalculating SHAP importance scores...")
+
+        # Get indices of confirmed + tentative features
+        selected_features = confirmed_features + tentative_features
+        selected_indices = [feature_columns.index(f) for f in selected_features]
+        X_selected = X[:, selected_indices]
+
+        # Fit a fresh Random Forest on selected features for SHAP
+        if task_type == "classification":
+            rf = RandomForestClassifier(
+                n_estimators=n_estimators,
+                n_jobs=-1,
+                random_state=random_state,
+                max_depth=7
+            )
+        else:
+            rf = RandomForestRegressor(
+                n_estimators=n_estimators,
+                n_jobs=-1,
+                random_state=random_state,
+                max_depth=7
+            )
+        rf.fit(X_selected, y)
+
+        # Use a sample for SHAP if dataset is large
+        if len(X_selected) > 1000:
+            sample_idx = np.random.RandomState(random_state).choice(
+                len(X_selected), size=1000, replace=False
+            )
+            X_sample = X_selected[sample_idx]
+        else:
+            X_sample = X_selected
+
+        # Calculate SHAP values
+        explainer = shap.TreeExplainer(rf)
+        shap_values = explainer.shap_values(X_sample)
+
+        # Handle different SHAP output formats
+        shap_values = np.array(shap_values)
+        if shap_values.ndim == 3:
+            # Shape is (samples, features, classes) or (classes, samples, features)
+            # Take mean absolute value across classes
+            if shap_values.shape[0] == len(X_sample):
+                # (samples, features, classes)
+                mean_shap = np.abs(shap_values).mean(axis=(0, 2))
+            else:
+                # (classes, samples, features)
+                mean_shap = np.abs(shap_values).mean(axis=(0, 1))
+        elif isinstance(shap_values, list):
+            # Old format: list of arrays per class
+            shap_values = np.abs(np.array(shap_values)).mean(axis=0)
+            mean_shap = shap_values.mean(axis=0)
+        else:
+            # 2D array (samples, features)
+            mean_shap = np.abs(shap_values).mean(axis=0)
+
+        # Create importance dict and normalize to percentages
+        total_importance = mean_shap.sum()
+        for i, feat in enumerate(selected_features):
+            feature_importance[feat] = round(float(mean_shap[i] / total_importance * 100), 2)
+
+        # Sort features by importance
+        confirmed_features.sort(key=lambda x: feature_importance.get(x, 0), reverse=True)
+        tentative_features.sort(key=lambda x: feature_importance.get(x, 0), reverse=True)
+
+    # Enabled features = confirmed + tentative (sorted by importance)
+    enabled_features = confirmed_features + tentative_features
+
+    if confirmed_features:
+        print(f"\nFeature importance (SHAP-based):")
+        for col in confirmed_features:
+            print(f"  {feature_importance[col]:5.2f}%  {col}")
 
     return {
         "enabled_features": enabled_features,
         "confirmed_features": confirmed_features,
         "tentative_features": tentative_features,
         "rejected_features": rejected_features,
+        "feature_importance": feature_importance,
         "generated_at": datetime.now().isoformat(),
-        "notes": "Auto-generated by Boruta analysis. Review tentative features."
+        "notes": "Features ranked by SHAP importance (percentage of total contribution)."
     }
 
 
