@@ -30,9 +30,9 @@ def get_connection():
     return psycopg2.connect(database_url)
 
 
-def fetch_historical_klines(conn) -> pd.DataFrame:
-    """Fetch historical klines with technical indicators."""
-    query = """
+def fetch_historical_klines(conn, days: int = 90) -> pd.DataFrame:
+    """Fetch historical klines with technical indicators (last N days)."""
+    query = f"""
         SELECT
             symbol,
             open_time as timestamp,
@@ -50,31 +50,34 @@ def fetch_historical_klines(conn) -> pd.DataFrame:
             stoch_d,
             volume_sma
         FROM historical_klines
+        WHERE open_time >= NOW() - INTERVAL '{days} days'
         ORDER BY symbol, open_time
     """
     return pd.read_sql(query, conn)
 
 
-def fetch_fear_greed(conn) -> pd.DataFrame:
-    """Fetch fear & greed index data."""
-    query = """
+def fetch_fear_greed(conn, days: int = 90) -> pd.DataFrame:
+    """Fetch fear & greed index data (last N days)."""
+    query = f"""
         SELECT
             index_timestamp as timestamp,
             value as fear_greed
         FROM fear_greed_index
+        WHERE index_timestamp >= NOW() - INTERVAL '{days} days'
         ORDER BY index_timestamp
     """
     return pd.read_sql(query, conn)
 
 
-def fetch_funding_rates(conn) -> pd.DataFrame:
-    """Fetch funding rates per symbol."""
-    query = """
+def fetch_funding_rates(conn, days: int = 90) -> pd.DataFrame:
+    """Fetch funding rates per symbol (last N days)."""
+    query = f"""
         SELECT
             coin_symbol as symbol,
             funding_time as timestamp,
             funding_rate
         FROM funding_rates
+        WHERE funding_time >= NOW() - INTERVAL '{days} days'
         ORDER BY coin_symbol, funding_time
     """
     df = pd.read_sql(query, conn)
@@ -83,14 +86,15 @@ def fetch_funding_rates(conn) -> pd.DataFrame:
     return df
 
 
-def fetch_news_sentiment(conn) -> pd.DataFrame:
-    """Fetch news sentiment per symbol."""
-    query = """
+def fetch_news_sentiment(conn, days: int = 90) -> pd.DataFrame:
+    """Fetch news sentiment per symbol (last N days)."""
+    query = f"""
         SELECT
             coin_symbol as symbol,
             recorded_at as timestamp,
             net_sentiment as sentiment_score
         FROM news_sentiment
+        WHERE recorded_at >= NOW() - INTERVAL '{days} days'
         ORDER BY coin_symbol, recorded_at
     """
     df = pd.read_sql(query, conn)
@@ -98,44 +102,45 @@ def fetch_news_sentiment(conn) -> pd.DataFrame:
     return df
 
 
-def fetch_btc_prices(conn) -> pd.DataFrame:
-    """Fetch BTC prices for calculating BTC price change."""
-    query = """
+def fetch_btc_prices(conn, days: int = 90) -> pd.DataFrame:
+    """Fetch BTC prices for calculating BTC price change (last N days)."""
+    query = f"""
         SELECT
             open_time as timestamp,
             close_price as btc_close
         FROM historical_klines
         WHERE symbol = 'BTCUSDT'
+          AND open_time >= NOW() - INTERVAL '{days} days'
         ORDER BY open_time
     """
     return pd.read_sql(query, conn)
 
 
-def build_features_dataframe(conn) -> pd.DataFrame:
-    """Build the complete features dataframe."""
-    steps = [
-        ("Fetching historical klines", fetch_historical_klines),
-        ("Fetching fear & greed index", fetch_fear_greed),
-        ("Fetching funding rates", fetch_funding_rates),
-        ("Fetching news sentiment", fetch_news_sentiment),
-        ("Fetching BTC prices", fetch_btc_prices),
-    ]
+def build_features_dataframe(conn, days: int = 90) -> pd.DataFrame:
+    """Build the complete features dataframe (last N days of data)."""
+    print(f"Fetching last {days} days of data...")
 
     datasets = {}
-    with tqdm(total=len(steps), desc="Fetching data", unit="table") as pbar:
-        for name, fetch_func in steps:
-            pbar.set_description(name)
-            if fetch_func == fetch_historical_klines:
-                datasets['df'] = fetch_func(conn)
-            elif fetch_func == fetch_fear_greed:
-                datasets['fear_greed'] = fetch_func(conn)
-            elif fetch_func == fetch_funding_rates:
-                datasets['funding'] = fetch_func(conn)
-            elif fetch_func == fetch_news_sentiment:
-                datasets['sentiment'] = fetch_func(conn)
-            elif fetch_func == fetch_btc_prices:
-                datasets['btc'] = fetch_func(conn)
-            pbar.update(1)
+    with tqdm(total=5, desc="Fetching data", unit="table") as pbar:
+        pbar.set_description("Fetching historical klines")
+        datasets['df'] = fetch_historical_klines(conn, days)
+        pbar.update(1)
+
+        pbar.set_description("Fetching fear & greed index")
+        datasets['fear_greed'] = fetch_fear_greed(conn, days)
+        pbar.update(1)
+
+        pbar.set_description("Fetching funding rates")
+        datasets['funding'] = fetch_funding_rates(conn, days)
+        pbar.update(1)
+
+        pbar.set_description("Fetching news sentiment")
+        datasets['sentiment'] = fetch_news_sentiment(conn, days)
+        pbar.update(1)
+
+        pbar.set_description("Fetching BTC prices")
+        datasets['btc'] = fetch_btc_prices(conn, days)
+        pbar.update(1)
 
     df = datasets['df']
     fear_greed = datasets['fear_greed']
