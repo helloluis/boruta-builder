@@ -153,15 +153,16 @@ def build_features_dataframe(conn) -> pd.DataFrame:
     sentiment['timestamp'] = pd.to_datetime(sentiment['timestamp']).dt.tz_localize(None)
     btc['timestamp'] = pd.to_datetime(btc['timestamp']).dt.tz_localize(None)
 
-    # Round timestamps to nearest 4 hours for fear_greed merge
-    fear_greed['timestamp'] = fear_greed['timestamp'].dt.floor('4H')
-    fear_greed = fear_greed.drop_duplicates(subset=['timestamp'], keep='last')
+    # Fear & Greed is daily data - merge on date (not 4-hour timestamp)
+    fear_greed['date'] = fear_greed['timestamp'].dt.date
+    fear_greed = fear_greed.drop(columns=['timestamp']).drop_duplicates(subset=['date'], keep='last')
+    df['date'] = df['timestamp'].dt.date
 
-    # Round funding and sentiment timestamps
-    funding['timestamp'] = funding['timestamp'].dt.floor('4H')
+    # Round funding and sentiment timestamps to 4 hours
+    funding['timestamp'] = funding['timestamp'].dt.floor('4h')
     funding = funding.drop_duplicates(subset=['symbol', 'timestamp'], keep='last')
 
-    sentiment['timestamp'] = sentiment['timestamp'].dt.floor('4H')
+    sentiment['timestamp'] = sentiment['timestamp'].dt.floor('4h')
     sentiment = sentiment.drop_duplicates(subset=['symbol', 'timestamp'], keep='last')
 
     # Calculate BTC price change (percentage change from previous period)
@@ -170,8 +171,12 @@ def build_features_dataframe(conn) -> pd.DataFrame:
     btc = btc[['timestamp', 'price_change_btc']]
 
     # Merge datasets with progress bar
+    def merge_fear_greed(d):
+        merged = d.merge(fear_greed, on='date', how='left')
+        return merged.drop(columns=['date'])
+
     merge_steps = [
-        ("Merging fear & greed", lambda d: d.merge(fear_greed, on='timestamp', how='left')),
+        ("Merging fear & greed", merge_fear_greed),
         ("Merging funding rates", lambda d: d.merge(funding, on=['symbol', 'timestamp'], how='left')),
         ("Merging sentiment", lambda d: d.merge(sentiment, on=['symbol', 'timestamp'], how='left')),
         ("Merging BTC price change", lambda d: d.merge(btc, on='timestamp', how='left')),
@@ -208,6 +213,12 @@ def build_features_dataframe(conn) -> pd.DataFrame:
     print(f"\nFinal dataset: {len(df)} rows, {len(df.columns)} columns")
     print(f"Target distribution: {df['target'].value_counts().to_dict()}")
 
+    # Data quality summary
+    indicator_cols = ['rsi_14', 'rsi_30', 'macd', 'macd_signal', 'bb_upper', 'bb_lower',
+                      'bb_width', 'momentum_10', 'stoch_k', 'stoch_d', 'volume_sma']
+    rows_with_indicators = df[indicator_cols].notna().all(axis=1).sum()
+    print(f"Rows with all indicators: {rows_with_indicators} ({100*rows_with_indicators/len(df):.1f}%)")
+
     return df
 
 
@@ -224,9 +235,10 @@ def main():
         df.to_csv(output_file, index=False)
         print(f"\nSaved to: {output_file}")
 
-        # Show sample
-        print("\nSample data:")
-        print(df.head(3).to_string())
+        # Show sample (recent data with indicators)
+        print("\nSample data (recent rows with indicators):")
+        sample = df[df['rsi_14'].notna()].tail(3)
+        print(sample.to_string())
 
     finally:
         conn.close()
