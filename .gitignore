@@ -1,6 +1,10 @@
 # Data files
 boruta-features-202*.csv
 
+# Environment files
+.env.local
+.env
+
 # Virtual environment
 venv/
 
