@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 import psycopg2
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 
 def get_connection():
@@ -112,25 +113,38 @@ def fetch_btc_prices(conn) -> pd.DataFrame:
 
 def build_features_dataframe(conn) -> pd.DataFrame:
     """Build the complete features dataframe."""
-    print("Fetching historical klines...")
-    df = fetch_historical_klines(conn)
-    print(f"  {len(df)} rows")
+    steps = [
+        ("Fetching historical klines", fetch_historical_klines),
+        ("Fetching fear & greed index", fetch_fear_greed),
+        ("Fetching funding rates", fetch_funding_rates),
+        ("Fetching news sentiment", fetch_news_sentiment),
+        ("Fetching BTC prices", fetch_btc_prices),
+    ]
 
-    print("Fetching fear & greed index...")
-    fear_greed = fetch_fear_greed(conn)
-    print(f"  {len(fear_greed)} rows")
+    datasets = {}
+    with tqdm(total=len(steps), desc="Fetching data", unit="table") as pbar:
+        for name, fetch_func in steps:
+            pbar.set_description(name)
+            if fetch_func == fetch_historical_klines:
+                datasets['df'] = fetch_func(conn)
+            elif fetch_func == fetch_fear_greed:
+                datasets['fear_greed'] = fetch_func(conn)
+            elif fetch_func == fetch_funding_rates:
+                datasets['funding'] = fetch_func(conn)
+            elif fetch_func == fetch_news_sentiment:
+                datasets['sentiment'] = fetch_func(conn)
+            elif fetch_func == fetch_btc_prices:
+                datasets['btc'] = fetch_func(conn)
+            pbar.update(1)
 
-    print("Fetching funding rates...")
-    funding = fetch_funding_rates(conn)
-    print(f"  {len(funding)} rows")
+    df = datasets['df']
+    fear_greed = datasets['fear_greed']
+    funding = datasets['funding']
+    sentiment = datasets['sentiment']
+    btc = datasets['btc']
 
-    print("Fetching news sentiment...")
-    sentiment = fetch_news_sentiment(conn)
-    print(f"  {len(sentiment)} rows")
-
-    print("Fetching BTC prices...")
-    btc = fetch_btc_prices(conn)
-    print(f"  {len(btc)} rows")
+    print(f"\nRows fetched: klines={len(df)}, fear_greed={len(fear_greed)}, "
+          f"funding={len(funding)}, sentiment={len(sentiment)}, btc={len(btc)}")
 
     # Convert timestamps to timezone-naive for merging
     df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
@@ -155,25 +169,26 @@ def build_features_dataframe(conn) -> pd.DataFrame:
     btc['price_change_btc'] = btc['btc_close'].pct_change() * 100
     btc = btc[['timestamp', 'price_change_btc']]
 
-    print("\nMerging datasets...")
+    # Merge datasets with progress bar
+    merge_steps = [
+        ("Merging fear & greed", lambda d: d.merge(fear_greed, on='timestamp', how='left')),
+        ("Merging funding rates", lambda d: d.merge(funding, on=['symbol', 'timestamp'], how='left')),
+        ("Merging sentiment", lambda d: d.merge(sentiment, on=['symbol', 'timestamp'], how='left')),
+        ("Merging BTC price change", lambda d: d.merge(btc, on='timestamp', how='left')),
+    ]
 
-    # Merge fear & greed
-    df = df.merge(fear_greed, on='timestamp', how='left')
+    with tqdm(total=len(merge_steps) + 1, desc="Processing", unit="step") as pbar:
+        for name, merge_func in merge_steps:
+            pbar.set_description(name)
+            df = merge_func(df)
+            pbar.update(1)
 
-    # Merge funding rates
-    df = df.merge(funding, on=['symbol', 'timestamp'], how='left')
-
-    # Merge sentiment
-    df = df.merge(sentiment, on=['symbol', 'timestamp'], how='left')
-
-    # Merge BTC price change
-    df = df.merge(btc, on='timestamp', how='left')
-
-    # Create target: 1 if next period's close > current close, 0 otherwise
-    print("Creating target variable...")
-    df = df.sort_values(['symbol', 'timestamp'])
-    df['next_close'] = df.groupby('symbol')['close'].shift(-1)
-    df['target'] = (df['next_close'] > df['close']).astype(float)
+        # Create target: 1 if next period's close > current close, 0 otherwise
+        pbar.set_description("Creating target variable")
+        df = df.sort_values(['symbol', 'timestamp'])
+        df['next_close'] = df.groupby('symbol')['close'].shift(-1)
+        df['target'] = (df['next_close'] > df['close']).astype(float)
+        pbar.update(1)
 
     # Drop the helper column and last row per symbol (no target)
     df = df.drop(columns=['next_close'])

@@ -1,6 +1,6 @@
 # Boruta Feature Selection Tool
 
-Analyzes CSV data to identify important features using the Boruta algorithm. Outputs `feature_config.json` with confirmed, tentative, and rejected features.
+Analyzes CSV data to identify important features using the Boruta algorithm with SHAP-based importance ranking. Outputs `feature_config.json` with confirmed, tentative, and rejected features ranked by importance.
 
 ## Setup (one-time)
 
@@ -15,10 +15,20 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Quick Usage
+## Quick Start
+
+### 1. Build features CSV from database
 
 ```bash
-python boruta_analysis.py your_data.csv --target target_column
+python build_features_csv.py
+```
+
+This pulls data from the Neon database (configured in `.env.local`) and creates `boruta-features-YYYY-MM-DD.csv`.
+
+### 2. Run Boruta analysis
+
+```bash
+python boruta_analysis.py boruta-features-2025-12-16.csv --target target
 ```
 
 ## Common Examples
@@ -58,8 +68,33 @@ Creates `feature_config.json`:
 - **rejected_features** - not useful
 - **enabled_features** - confirmed + tentative combined
 
+## Database Script
+
+The `build_features_csv.py` script fetches data from multiple tables and merges them:
+
+- **historical_klines** - OHLCV data with technical indicators (RSI, MACD, Bollinger Bands, etc.)
+- **fear_greed_index** - Market sentiment index
+- **funding_rates** - Perpetual futures funding rates
+- **news_sentiment** - News sentiment scores
+- **BTC price change** - Calculated from BTCUSDT close prices
+
+The target variable is binary: `1` if next period's close > current close, `0` otherwise.
+
+### Environment Setup
+
+Create `.env.local` with your Neon database URL:
+
+```
+DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+```
+
 ## Test Run
 
 ```bash
+# Using sample data
 python boruta_analysis.py sample_data.csv --target target
+
+# Using database data
+python build_features_csv.py
+python boruta_analysis.py boruta-features-2025-12-16.csv --target target -q
 ```
