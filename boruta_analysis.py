@@ -252,8 +252,8 @@ Examples:
     )
     parser.add_argument(
         "--target", "-t",
-        required=True,
-        help="Name of the target column in the CSV"
+        default="target",
+        help="Name of the target column in the CSV (default: target)"
     )
     parser.add_argument(
         "--task",

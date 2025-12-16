@@ -7,11 +7,14 @@ Analyzes CSV data to identify important features using the Boruta algorithm with
 **Requires Python 3.12** (3.11 also works). Python 3.13+ is not compatible with the Boruta package.
 
 ```bash
-# Create virtual environment with Python 3.12
+# Windows
 py -3.12 -m venv venv
 venv\Scripts\activate
+pip install -r requirements.txt
 
-# Install dependencies
+# Linux/Mac
+python3.12 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -28,7 +31,7 @@ This pulls data from the Neon database (configured in `.env.local`) and creates 
 ### 2. Run Boruta analysis
 
 ```bash
-python boruta_analysis.py boruta-features-2025-12-16.csv --target target
+python boruta_analysis.py boruta-features-2025-12-16.csv
 ```
 
 ## Common Examples
@@ -54,7 +57,7 @@ python boruta_analysis.py data.csv --target label -o my_results.json
 
 | Flag | What it does |
 |------|--------------|
-| `--target, -t` | Target column name (required) |
+| `--target, -t` | Target column name (default: `target`) |
 | `--task` | `classification` or `regression` |
 | `--max-iter` | More = better results but slower (default: 100) |
 | `--output, -o` | Output filename (default: feature_config.json) |
@@ -92,9 +95,9 @@ DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 
 ```bash
 # Using sample data
-python boruta_analysis.py sample_data.csv --target target
+python boruta_analysis.py sample_data.csv
 
 # Using database data
 python build_features_csv.py
-python boruta_analysis.py boruta-features-2025-12-16.csv --target target -q
+python boruta_analysis.py boruta-features-2025-12-16.csv -q
 ```
