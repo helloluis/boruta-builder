@@ -91,6 +91,26 @@ Create `.env.local` with your Neon database URL:
 DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 ```
 
+## Weekly Automation
+
+The `weekly_boruta.sh` script runs every **Sunday at 1pm GMT+8** via cron and:
+
+1. Generates 90-day CSV from local PostgreSQL
+2. Runs Boruta analysis with SHAP ranking
+3. Copies `feature_config.json` to `/var/www/diamond-hands/models/`
+4. Pings [healthchecks.io](https://healthchecks.io) on success
+
+The Diamond Hands app picks up the updated feature config at 3pm to retrain its models.
+
+### Crontab Setup
+
+```bash
+crontab -e
+# Add: 0 5 * * 0 /path/to/boruta-builder/weekly_boruta.sh >> /var/log/boruta-weekly.log 2>&1
+```
+
+(0 5 UTC = 1pm GMT+8)
+
 ## Test Run
 
 ```bash
