@@ -19,15 +19,25 @@ from tqdm import tqdm
 
 
 def get_connection():
-    """Get database connection from .env.local."""
+    """Get database connection from .env.local or fall back to localhost."""
     env_path = Path(__file__).parent / '.env.local'
-    load_dotenv(env_path)
 
-    database_url = os.environ.get('DATABASE_URL')
-    if not database_url:
-        raise ValueError("DATABASE_URL not found in .env.local")
+    if env_path.exists():
+        load_dotenv(env_path)
+        database_url = os.environ.get('DATABASE_URL')
+        if database_url:
+            print("Using DATABASE_URL from .env.local")
+            return psycopg2.connect(database_url)
 
-    return psycopg2.connect(database_url)
+    # Fall back to localhost PostgreSQL
+    print("No .env.local found, using localhost PostgreSQL")
+    return psycopg2.connect(
+        host='localhost',
+        database='earnest_db',
+        user='earnest',
+        password='earnest_secure_2024',
+        port=5432
+    )
 
 
 def fetch_historical_klines(conn, days: int = 90) -> pd.DataFrame:
