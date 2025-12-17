@@ -8,14 +8,17 @@ and outputs feature_config.json with confirmed, tentative, and rejected features
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psycopg2
 import shap
 from boruta import BorutaPy
+from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 
@@ -37,7 +40,8 @@ def run_boruta_analysis(
     max_iter: int = 100,
     random_state: int = 42,
     n_estimators: int = 100,
-    verbose: int = 1
+    verbose: int = 1,
+    warnings_list: list = None
 ) -> dict:
     """
     Run Boruta feature selection analysis.
@@ -50,10 +54,14 @@ def run_boruta_analysis(
         random_state: Random seed for reproducibility
         n_estimators: Number of trees in the random forest
         verbose: Verbosity level (0=silent, 1=progress, 2=detailed)
+        warnings_list: Optional list to collect warnings for logging
 
     Returns:
         Dictionary with feature categorization results
     """
+    if warnings_list is None:
+        warnings_list = []
+
     if target_column not in df.columns:
         raise ValueError(f"Target column '{target_column}' not found in CSV. Available columns: {list(df.columns)}")
 
@@ -71,7 +79,9 @@ def run_boruta_analysis(
     # Drop rows with missing target values first
     if pd.isna(y).any():
         missing_count = pd.isna(y).sum()
-        print(f"Warning: Dropping {missing_count} rows with missing target values.")
+        warning_msg = f"Dropping {missing_count} rows with missing target values."
+        print(f"Warning: {warning_msg}")
+        warnings_list.append(warning_msg)
         mask = ~pd.isna(y)
         df = df[mask]
         y = y[mask]
@@ -79,13 +89,17 @@ def run_boruta_analysis(
     # Drop columns that are entirely NaN
     all_nan_cols = [col for col in feature_columns if df[col].isna().all()]
     if all_nan_cols:
-        print(f"Warning: Dropping columns with all NaN values: {all_nan_cols}")
+        warning_msg = f"Dropping columns with all NaN values: {all_nan_cols}"
+        print(f"Warning: {warning_msg}")
+        warnings_list.append(warning_msg)
         feature_columns = [col for col in feature_columns if col not in all_nan_cols]
 
     # Now get features and handle missing values
     X = df[feature_columns].values
     if np.isnan(X).any():
-        print("Warning: Found NaN values in features. Filling with column means.")
+        warning_msg = "Found NaN values in features. Filling with column means."
+        print(f"Warning: {warning_msg}")
+        warnings_list.append(warning_msg)
         df_features = df[feature_columns].fillna(df[feature_columns].mean())
         X = df_features.values
 
@@ -234,6 +248,71 @@ def save_feature_config(results: dict, output_path: str = "feature_config.json")
     print(f"\nFeature config saved to: {output_path}")
 
 
+def get_db_connection():
+    """Get database connection for logging."""
+    env_path = Path(__file__).parent / '.env.local'
+
+    if env_path.exists():
+        load_dotenv(env_path)
+        database_url = os.environ.get('DATABASE_URL')
+        if database_url:
+            return psycopg2.connect(database_url)
+
+    # Fall back to localhost PostgreSQL
+    return psycopg2.connect(
+        host='localhost',
+        database='earnest_db',
+        user='earnest',
+        password='earnest_secure_2024',
+        port=5432
+    )
+
+
+def log_to_database(results: dict, warnings: list, errors: list):
+    """Log Boruta results to ml_training_logs table."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Build the results JSONB
+        log_data = {
+            "confirmed_features": results.get("confirmed_features", []),
+            "tentative_features": results.get("tentative_features", []),
+            "rejected_features": results.get("rejected_features", []),
+            "feature_importance": results.get("feature_importance", {}),
+            "total_features_analyzed": (
+                len(results.get("confirmed_features", [])) +
+                len(results.get("tentative_features", [])) +
+                len(results.get("rejected_features", []))
+            ),
+            "confirmed_count": len(results.get("confirmed_features", [])),
+            "tentative_count": len(results.get("tentative_features", [])),
+            "rejected_count": len(results.get("rejected_features", [])),
+            "generated_at": results.get("generated_at"),
+        }
+
+        # Build warnings/errors JSONB (null if empty)
+        issues_data = None
+        if warnings or errors:
+            issues_data = json.dumps({
+                "warnings": warnings if warnings else [],
+                "errors": errors if errors else []
+            })
+
+        cur.execute("""
+            INSERT INTO ml_training_logs (helper_name, output, errors, created_at)
+            VALUES (%s, %s, %s, NOW())
+        """, ("Boruta", json.dumps(log_data), issues_data))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Results logged to ml_training_logs")
+
+    except Exception as e:
+        print(f"Warning: Could not log to database: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Boruta feature selection analysis on a CSV file.",
@@ -292,6 +371,9 @@ Examples:
 
     args = parser.parse_args()
 
+    warnings_list = []
+    errors_list = []
+
     try:
         # Load data
         df = load_csv(args.csv_file)
@@ -304,17 +386,27 @@ Examples:
             max_iter=args.max_iter,
             n_estimators=args.n_estimators,
             random_state=args.seed,
-            verbose=0 if args.quiet else 2
+            verbose=0 if args.quiet else 2,
+            warnings_list=warnings_list
         )
 
         # Save results
         save_feature_config(results, args.output)
 
+        # Log to database
+        log_to_database(results, warnings_list, errors_list)
+
         print("\nDone!")
         return 0
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        error_msg = str(e)
+        errors_list.append(error_msg)
+        print(f"Error: {error_msg}", file=sys.stderr)
+
+        # Still log the error to database
+        log_to_database({}, warnings_list, errors_list)
+
         return 1
 
 
