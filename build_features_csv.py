@@ -7,6 +7,7 @@ and news_sentiment tables, then creates a target variable based on
 whether the price goes up in the next period.
 """
 
+import argparse
 import os
 import sys
 from datetime import datetime
@@ -238,13 +239,30 @@ def build_features_dataframe(conn, days: int = 90) -> pd.DataFrame:
 
 
 def main():
-    output_file = f"boruta-features-{datetime.now().strftime('%Y-%m-%d')}.csv"
+    parser = argparse.ArgumentParser(
+        description="Build features CSV from database for Boruta analysis."
+    )
+    parser.add_argument(
+        "--days", "-d",
+        type=int,
+        default=90,
+        help="Number of days of data to fetch (default: 90)"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default=None,
+        help="Output filename (default: boruta-features-YYYY-MM-DD.csv)"
+    )
+    args = parser.parse_args()
+
+    output_file = args.output or f"boruta-features-{datetime.now().strftime('%Y-%m-%d')}.csv"
 
     print("Connecting to database...")
     conn = get_connection()
 
     try:
-        df = build_features_dataframe(conn)
+        df = build_features_dataframe(conn, days=args.days)
 
         # Save to CSV
         df.to_csv(output_file, index=False)
