@@ -47,6 +47,9 @@ def fetch_historical_klines(conn, days: int = 90) -> pd.DataFrame:
         SELECT
             symbol,
             open_time as timestamp,
+            open_price as open,
+            high_price as high,
+            low_price as low,
             close_price as close,
             volume,
             rsi_14,
@@ -127,8 +130,15 @@ def fetch_btc_prices(conn, days: int = 90) -> pd.DataFrame:
     return pd.read_sql(query, conn)
 
 
-def build_features_dataframe(conn, days: int = 90) -> pd.DataFrame:
-    """Build the complete features dataframe (last N days of data)."""
+def build_features_dataframe(conn, days: int = 90, significant_moves: bool = False, threshold: float = 0.5) -> pd.DataFrame:
+    """Build the complete features dataframe (last N days of data).
+
+    Args:
+        conn: Database connection
+        days: Number of days of data to fetch
+        significant_moves: If True, use significant move labeling (LONG/SHORT/exclude)
+        threshold: Percentage threshold for significant moves (default 0.5%)
+    """
     print(f"Fetching last {days} days of data...")
 
     datasets = {}
@@ -204,19 +214,64 @@ def build_features_dataframe(conn, days: int = 90) -> pd.DataFrame:
             df = merge_func(df)
             pbar.update(1)
 
-        # Create target: 1 if next period's close > current close, 0 otherwise
+        # Create target variable
         pbar.set_description("Creating target variable")
         df = df.sort_values(['symbol', 'timestamp'])
-        df['next_close'] = df.groupby('symbol')['close'].shift(-1)
-        df['target'] = (df['next_close'] > df['close']).astype(float)
-        pbar.update(1)
 
-    # Drop the helper column and last row per symbol (no target)
-    df = df.drop(columns=['next_close'])
+        if significant_moves:
+            # Significant moves labeling: predict LONG (1) or SHORT (0) opportunities
+            # Get next candle's OHLC
+            df['next_open'] = df.groupby('symbol')['open'].shift(-1)
+            df['next_high'] = df.groupby('symbol')['high'].shift(-1)
+            df['next_low'] = df.groupby('symbol')['low'].shift(-1)
+
+            # Calculate percentage moves from next candle's open
+            df['high_pct'] = (df['next_high'] - df['next_open']) / df['next_open'] * 100
+            df['low_pct'] = (df['next_open'] - df['next_low']) / df['next_open'] * 100
+
+            # Label based on significant moves
+            # 1 = LONG opportunity (high hits threshold, low doesn't)
+            # 0 = SHORT opportunity (low hits threshold, high doesn't)
+            # NaN = exclude (ambiguous or no move)
+            def label_move(row):
+                high_hit = row['high_pct'] >= threshold
+                low_hit = row['low_pct'] >= threshold
+                if high_hit and not low_hit:
+                    return 1.0  # LONG
+                elif low_hit and not high_hit:
+                    return 0.0  # SHORT
+                else:
+                    return float('nan')  # Exclude (both hit or neither)
+
+            df['target'] = df.apply(label_move, axis=1)
+
+            # Drop helper columns
+            df = df.drop(columns=['next_open', 'next_high', 'next_low', 'high_pct', 'low_pct'])
+
+            # Count before dropping
+            total_rows = len(df)
+            excluded = df['target'].isna().sum()
+            long_count = (df['target'] == 1.0).sum()
+            short_count = (df['target'] == 0.0).sum()
+
+            # Drop rows with NaN target (ambiguous/no move)
+            df = df.dropna(subset=['target'])
+
+            print(f"\n  Significant moves labeling (threshold: {threshold}%):")
+            print(f"    LONG opportunities: {long_count} ({100*long_count/total_rows:.1f}%)")
+            print(f"    SHORT opportunities: {short_count} ({100*short_count/total_rows:.1f}%)")
+            print(f"    Excluded (ambiguous/no move): {excluded} ({100*excluded/total_rows:.1f}%)")
+        else:
+            # Original labeling: 1 if next period's close > current close, 0 otherwise
+            df['next_close'] = df.groupby('symbol')['close'].shift(-1)
+            df['target'] = (df['next_close'] > df['close']).astype(float)
+            df = df.drop(columns=['next_close'])
+
+        pbar.update(1)
 
     # Reorder columns
     columns = [
-        'timestamp', 'symbol', 'close',
+        'timestamp', 'symbol', 'open', 'high', 'low', 'close',
         'rsi_14', 'rsi_30', 'macd', 'macd_signal',
         'bb_upper', 'bb_lower', 'bb_width',
         'momentum_10', 'stoch_k', 'stoch_d',
@@ -254,6 +309,17 @@ def main():
         default=None,
         help="Output filename (default: boruta-features-YYYY-MM-DD.csv)"
     )
+    parser.add_argument(
+        "--significant-moves", "-s",
+        action="store_true",
+        help="Use significant moves labeling instead of directional (excludes ambiguous candles)"
+    )
+    parser.add_argument(
+        "--threshold", "-t",
+        type=float,
+        default=0.5,
+        help="Percentage threshold for significant moves (default: 0.5)"
+    )
     args = parser.parse_args()
 
     output_file = args.output or f"boruta-features-{datetime.now().strftime('%Y-%m-%d')}.csv"
@@ -262,7 +328,12 @@ def main():
     conn = get_connection()
 
     try:
-        df = build_features_dataframe(conn, days=args.days)
+        df = build_features_dataframe(
+            conn,
+            days=args.days,
+            significant_moves=args.significant_moves,
+            threshold=args.threshold
+        )
 
         # Save to CSV
         df.to_csv(output_file, index=False)
