@@ -279,8 +279,8 @@ def log_to_database(results: dict, warnings: list, errors: list):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Build the results JSONB
-        log_data = {
+        # Build the metrics JSONB (matches table schema)
+        metrics = {
             "confirmed_features": results.get("confirmed_features", []),
             "tentative_features": results.get("tentative_features", []),
             "rejected_features": results.get("rejected_features", []),
@@ -293,21 +293,19 @@ def log_to_database(results: dict, warnings: list, errors: list):
             "confirmed_count": len(results.get("confirmed_features", [])),
             "tentative_count": len(results.get("tentative_features", [])),
             "rejected_count": len(results.get("rejected_features", [])),
-            "generated_at": results.get("generated_at"),
         }
 
-        # Build warnings/errors JSONB (null if empty)
-        issues_data = None
-        if warnings or errors:
-            issues_data = json.dumps({
-                "warnings": warnings if warnings else [],
-                "errors": errors if errors else []
-            })
+        # Add errors to metrics if any
+        if errors:
+            metrics["errors"] = errors
+
+        # Warnings is a text[] column
+        warnings_array = warnings if warnings else None
 
         cur.execute("""
-            INSERT INTO ml_training_logs (helper_name, output, errors, created_at)
-            VALUES (%s, %s, %s, NOW())
-        """, ("Boruta", json.dumps(log_data), issues_data))
+            INSERT INTO ml_training_logs (helper_name, trained_at, metrics, source, warnings)
+            VALUES (%s, NOW(), %s, %s, %s)
+        """, ("Boruta", json.dumps(metrics), "boruta-builder", warnings_array))
 
         conn.commit()
         cur.close()
