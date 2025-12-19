@@ -108,6 +108,8 @@ def run_boruta_analysis(
     print(f"  Features: {len(feature_columns)}")
     print(f"  Samples: {len(y)}")
     print(f"  Max iterations: {max_iter}")
+    print(f"  This may take 10-30+ minutes on limited hardware...")
+    sys.stdout.flush()
 
     # Select appropriate estimator
     if task_type == "classification":
@@ -135,6 +137,8 @@ def run_boruta_analysis(
     )
 
     boruta.fit(X, y)
+    print("  Boruta fitting complete.")
+    sys.stdout.flush()
 
     # Categorize features
     confirmed_features = []
@@ -158,6 +162,7 @@ def run_boruta_analysis(
     feature_importance = {}
     if confirmed_features or tentative_features:
         print(f"\nCalculating SHAP importance scores...")
+        sys.stdout.flush()
 
         # Get indices of confirmed + tentative features
         selected_features = confirmed_features + tentative_features
