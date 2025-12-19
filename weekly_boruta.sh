@@ -10,6 +10,7 @@
 # Monitoring: Create a check at https://healthchecks.io and set HEALTHCHECK_URL
 #
 # Methodology:
+# - Uses significant moves labeling (0.5% threshold) to filter noise
 # - Runs Boruta on both 30-day and 90-day windows
 # - Combines results: only features confirmed in BOTH windows are used
 # - Importance scores are averaged across both windows
@@ -38,11 +39,11 @@ echo "Started at: $(date)"
 
 cd "$SCRIPT_DIR"
 
-echo "Generating 30-day CSV..."
-"$VENV_PYTHON" build_features_csv.py --days 30 -o "boruta-features-30day.csv"
+echo "Generating 30-day CSV (significant moves, 0.5% threshold)..."
+"$VENV_PYTHON" build_features_csv.py --days 30 --significant-moves -o "boruta-features-30day.csv"
 
-echo "Generating 90-day CSV..."
-"$VENV_PYTHON" build_features_csv.py --days 90 -o "boruta-features-90day.csv"
+echo "Generating 90-day CSV (significant moves, 0.5% threshold)..."
+"$VENV_PYTHON" build_features_csv.py --days 90 --significant-moves -o "boruta-features-90day.csv"
 
 echo "CSVs generated"
 echo "Completed at: $(date)"
