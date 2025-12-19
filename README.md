@@ -93,14 +93,51 @@ DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 
 ## Weekly Automation
 
-The `weekly_boruta.sh` script runs every **Sunday at 1pm GMT+8** via cron and:
+The `weekly_boruta.sh` script runs every **Sunday at 1pm GMT+8** via cron.
 
-1. Generates 90-day CSV from local PostgreSQL
-2. Runs Boruta analysis with SHAP ranking
-3. Copies `feature_config.json` to `/var/www/diamond-hands/models/`
-4. Pings [healthchecks.io](https://healthchecks.io) on success
+### Multi-Window Methodology
+
+To find features that are robust across different market regimes, the pipeline runs Boruta on **two time windows** and combines the results:
+
+1. **30-day window** - Captures recent market regime and short-term patterns
+2. **90-day window** - Captures longer-term patterns and multiple regime changes
+
+**Combination rules:**
+- **Confirmed features** = features confirmed in BOTH windows (robust across regimes)
+- **Tentative features** = features confirmed in ONE window but not both (regime-dependent)
+- **Rejected features** = features rejected in BOTH windows
+- **Importance scores** = averaged across both windows
+
+This approach prevents overfitting to either recent choppy markets or older trending markets.
+
+### Pipeline Steps
+
+1. Generate 30-day and 90-day CSVs from local PostgreSQL
+2. Run Boruta analysis on both windows
+3. Combine results using `combine_boruta_results.py`
+4. Copy `feature_config.json` to `/var/www/diamond-hands/models/`
+5. Ping [healthchecks.io](https://healthchecks.io) on success
 
 The Diamond Hands app picks up the updated feature config at 3pm to retrain its models.
+
+### Manual Multi-Window Analysis
+
+```bash
+# Generate CSVs for different windows
+python build_features_csv.py --days 30 -o boruta-features-30day.csv
+python build_features_csv.py --days 90 -o boruta-features-90day.csv
+
+# Run Boruta on each
+python boruta_analysis.py boruta-features-30day.csv -q -o feature_config_30day.json
+python boruta_analysis.py boruta-features-90day.csv -q -o feature_config_90day.json
+
+# Combine results
+python combine_boruta_results.py \
+    feature_config_30day.json \
+    feature_config_90day.json \
+    --labels "30-day" "90-day" \
+    -o feature_config.json
+```
 
 ### Crontab Setup
 
