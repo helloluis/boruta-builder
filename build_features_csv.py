@@ -62,7 +62,9 @@ def fetch_historical_klines(conn, days: int = 90) -> pd.DataFrame:
             momentum_10,
             stoch_k,
             stoch_d,
-            volume_sma
+            volume_sma,
+            fear_greed,
+            fear_greed_alt
         FROM historical_klines
         WHERE open_time >= NOW() - INTERVAL '{days} days'
         ORDER BY symbol, open_time
@@ -142,13 +144,9 @@ def build_features_dataframe(conn, days: int = 90, significant_moves: bool = Fal
     print(f"Fetching last {days} days of data...")
 
     datasets = {}
-    with tqdm(total=5, desc="Fetching data", unit="table") as pbar:
+    with tqdm(total=4, desc="Fetching data", unit="table") as pbar:
         pbar.set_description("Fetching historical klines")
         datasets['df'] = fetch_historical_klines(conn, days)
-        pbar.update(1)
-
-        pbar.set_description("Fetching fear & greed index")
-        datasets['fear_greed'] = fetch_fear_greed(conn, days)
         pbar.update(1)
 
         pbar.set_description("Fetching funding rates")
@@ -164,25 +162,18 @@ def build_features_dataframe(conn, days: int = 90, significant_moves: bool = Fal
         pbar.update(1)
 
     df = datasets['df']
-    fear_greed = datasets['fear_greed']
     funding = datasets['funding']
     sentiment = datasets['sentiment']
     btc = datasets['btc']
 
-    print(f"\nRows fetched: klines={len(df)}, fear_greed={len(fear_greed)}, "
+    print(f"\nRows fetched: klines={len(df)}, "
           f"funding={len(funding)}, sentiment={len(sentiment)}, btc={len(btc)}")
 
     # Convert timestamps to timezone-naive for merging
     df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
-    fear_greed['timestamp'] = pd.to_datetime(fear_greed['timestamp']).dt.tz_localize(None)
     funding['timestamp'] = pd.to_datetime(funding['timestamp']).dt.tz_localize(None)
     sentiment['timestamp'] = pd.to_datetime(sentiment['timestamp']).dt.tz_localize(None)
     btc['timestamp'] = pd.to_datetime(btc['timestamp']).dt.tz_localize(None)
-
-    # Fear & Greed is daily data - merge on date (not 4-hour timestamp)
-    fear_greed['date'] = fear_greed['timestamp'].dt.date
-    fear_greed = fear_greed.drop(columns=['timestamp']).drop_duplicates(subset=['date'], keep='last')
-    df['date'] = df['timestamp'].dt.date
 
     # Round funding and sentiment timestamps to 4 hours
     funding['timestamp'] = funding['timestamp'].dt.floor('4h')
@@ -197,12 +188,8 @@ def build_features_dataframe(conn, days: int = 90, significant_moves: bool = Fal
     btc = btc[['timestamp', 'price_change_btc']]
 
     # Merge datasets with progress bar
-    def merge_fear_greed(d):
-        merged = d.merge(fear_greed, on='date', how='left')
-        return merged.drop(columns=['date'])
-
+    # Note: fear_greed and fear_greed_alt are now in historical_klines directly
     merge_steps = [
-        ("Merging fear & greed", merge_fear_greed),
         ("Merging funding rates", lambda d: d.merge(funding, on=['symbol', 'timestamp'], how='left')),
         ("Merging sentiment", lambda d: d.merge(sentiment, on=['symbol', 'timestamp'], how='left')),
         ("Merging BTC price change", lambda d: d.merge(btc, on='timestamp', how='left')),
@@ -276,7 +263,7 @@ def build_features_dataframe(conn, days: int = 90, significant_moves: bool = Fal
         'bb_upper', 'bb_lower', 'bb_width',
         'momentum_10', 'stoch_k', 'stoch_d',
         'volume', 'volume_sma',
-        'funding_rate', 'fear_greed', 'sentiment_score',
+        'funding_rate', 'fear_greed', 'fear_greed_alt', 'sentiment_score',
         'price_change_btc', 'target'
     ]
     df = df[columns]
