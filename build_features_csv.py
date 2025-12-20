@@ -63,7 +63,6 @@ def fetch_historical_klines(conn, days: int = 90) -> pd.DataFrame:
             stoch_k,
             stoch_d,
             volume_sma,
-            fear_greed,
             fear_greed_alt
         FROM historical_klines
         WHERE open_time >= NOW() - INTERVAL '{days} days'
@@ -263,7 +262,7 @@ def build_features_dataframe(conn, days: int = 90, significant_moves: bool = Fal
         'bb_upper', 'bb_lower', 'bb_width',
         'momentum_10', 'stoch_k', 'stoch_d',
         'volume', 'volume_sma',
-        'funding_rate', 'fear_greed', 'fear_greed_alt', 'sentiment_score',
+        'funding_rate', 'fear_greed_alt', 'sentiment_score',
         'price_change_btc', 'target'
     ]
     df = df[columns]
